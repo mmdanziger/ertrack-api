@@ -98,7 +98,7 @@ class HospitalSet(object):
         elif freq == "hourly":
             url = "/api/dump/hourly/"
         else:
-            raise ValueError("Frequency not supported")
+            raise NotImplementedError("Frequency not supported")
         url = urljoin(self.root_url, url)
         r = requests.get(url)
         all_histories = defaultdict(lambda: {"observed_time": [], "wait_time_mins": []})
@@ -132,21 +132,35 @@ class HospitalSet(object):
             d = h.__dict__[f"{freq}_history"]
             for t,v in zip(d["observed_time"],d["wait_time_mins"]):
                 self.matrix[freq][hid, time_index_dict[t.isoformat()]] = v
-        self.time_index[freq] = time_index
+        self.time_index[freq] = [dateutil.parser.parse(t) for t in time_index]
         self.matrix[freq] = np.ma.masked_less(self.matrix[freq],0)
         self.df[freq] = pd.DataFrame(self.matrix[freq], index=[h.hospital_name for h in self.hospitals],
                           columns=self.time_index[freq])
+
+    def get_matrix_view(self,freq="daily",date_filter=None,hospital_filter=None):
+        if date_filter is None:
+            date_filter = lambda x: True
+        if hospital_filter is None:
+            hospital_filter = lambda x: True
+        tidx = [True if date_filter(t) else False for i,t in enumerate(self.time_index[freq])]
+        hidx = [True if hospital_filter(h) else False for i,h in enumerate(self.hospitals)]
+        return self.matrix[freq][:,tidx][hidx,:]
+
 
     def plot_hospital_matrix(self,freq="daily"):
         plt.pcolormesh([t[:10] for t in self.time_index[freq]], [h.hospital_name for h in self.hospitals],
                    self.matrix[freq])
         plt.xticks(rotation=50)
 
-    def get_impacted_fraction(self,freq="daily",threshold=15):
+    def get_impacted_fraction(self,freq="daily",date_filter=None,threshold=15):
         df = self.df[freq]
-        df_frac = df[df >= threshold].count() / df[df >= 0].count()
-        x, y = df_frac.reset_index().values.T
-        x = [dateutil.parser.parse(i).date() for i in x]
+        if date_filter is None:
+            date_filter = lambda x: True
+        df_frac = (df[df >= threshold].count() / df[df >= 0].count()).reset_index()
+        df_frac = df_frac[df_frac["index"].apply(date_filter)]
+        x, y = df_frac.values.T
+        if isinstance(x[0],str):
+            x = [dateutil.parser.parse(i).date() for i in x]
         return x,y
 
     def plot_impacted_fraction(self,freq="daily",threshold=15):
